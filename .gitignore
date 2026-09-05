@@ -2,3 +2,4 @@ node_modules/
 .env
 backend/.idea/
 backend/orgtrack-backend/target/
+backend/orgtrack-backend/src/main/resources/db.properties
