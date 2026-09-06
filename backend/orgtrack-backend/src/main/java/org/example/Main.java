@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.javalin.Javalin;
 import io.javalin.json.JavalinJackson;
+import org.mindrot.jbcrypt.BCrypt;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -47,6 +48,82 @@ public class Main {
                 ctx.result("Database connected successfully!");
             } catch (SQLException e) {
                 ctx.result("Database connection failed: " + e.getMessage());
+            }
+        });
+
+        // ================= AUTH =================
+
+        app.post("/signup", ctx -> {
+            User newUser = ctx.bodyAsClass(User.class);
+
+            if (newUser.username == null || newUser.email == null || newUser.password == null) {
+                ctx.status(400).result("username, email, and password are required");
+                return;
+            }
+
+            String hashedPassword = BCrypt.hashpw(newUser.password, BCrypt.gensalt());
+
+            try (Connection conn = getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(
+                         "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
+                         Statement.RETURN_GENERATED_KEYS)) {
+
+                stmt.setString(1, newUser.username);
+                stmt.setString(2, newUser.email);
+                stmt.setString(3, hashedPassword);
+                stmt.executeUpdate();
+
+                try (ResultSet keys = stmt.getGeneratedKeys()) {
+                    if (keys.next()) {
+                        newUser.id = keys.getInt(1);
+                    }
+                }
+
+                newUser.password = null;
+                ctx.status(201).json(newUser);
+
+            } catch (SQLException e) {
+                ctx.status(500).result("Error creating user: " + e.getMessage());
+            }
+        });
+
+        app.post("/login", ctx -> {
+            User loginAttempt = ctx.bodyAsClass(User.class);
+
+            if (loginAttempt.username == null || loginAttempt.password == null) {
+                ctx.status(400).result("username and password are required");
+                return;
+            }
+
+            try (Connection conn = getConnection();
+                 PreparedStatement stmt = conn.prepareStatement(
+                         "SELECT id, username, email, password_hash FROM users WHERE username = ?")) {
+
+                stmt.setString(1, loginAttempt.username);
+
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (!rs.next()) {
+                        ctx.status(401).result("Invalid username or password");
+                        return;
+                    }
+
+                    String storedHash = rs.getString("password_hash");
+
+                    if (BCrypt.checkpw(loginAttempt.password, storedHash)) {
+                        User loggedInUser = new User(
+                                rs.getInt("id"),
+                                rs.getString("username"),
+                                rs.getString("email"),
+                                null
+                        );
+                        ctx.json(loggedInUser);
+                    } else {
+                        ctx.status(401).result("Invalid username or password");
+                    }
+                }
+
+            } catch (SQLException e) {
+                ctx.status(500).result("Error during login: " + e.getMessage());
             }
         });
 
